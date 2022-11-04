@@ -1,0 +1,206 @@
+---
+title: "Time Series - Home Price Index"
+author: "AyşegülBinbaş"
+date: "12 01 2022"
+output: html_document
+---
+
+```{r}
+
+
+# Monthly data set starting in 1995.
+data<-read.table("C:/hpi.txt",col.names = F)
+hpi<-ts(data,start=1995,frequency=12)
+head(hpi)
+library(stats)
+library(fpp)
+
+
+#Main plots of time series analysis
+library(TSA)
+library(ggplot2)
+
+autoplot(hpi,main="hpi")
+library(dygraphs)
+dygraph(hpi,main="hpi")
+#The series is not stationary because it is seen that there is an increasing trend.
+#We haven’t known the type of trend yet.
+
+#After drawing time series plot of the process, it is necessary to draw acf and pacf to go further.
+
+library(forecast)
+
+p1 <- ggAcf(hpi,main="ACF of hpi")
+
+p2 <-ggPacf(hpi,main="PACF of hpi")
+
+library(gridExtra)
+
+grid.arrange(p1,p2,ncol=2)
+
+#ACF shows linear decay,hence the series is not stationary.
+#Since the process is not stationary, it is not necessary to interpret PACF.
+
+#Divide the data set into train and test sets
+
+
+trainindex=1:(length(hpi)-12)
+train=hpi[trainindex]
+test=hpi[-trainindex]
+
+
+#Achieve stationary in variance if it is necessary
+
+library(tseries)
+
+#Before going further, we must apply box-cox transformation. to stabilize the variance of the system if it is necessary.
+lambda <- BoxCox.lambda(train)
+lambda
+
+train_t=BoxCox(train,lambda) #transform the dataset
+
+
+#To check whether the process is stationary or not
+
+#We will consider this following hypothesis.
+#Ho: The process is stationary. H1: The process is not stationary.
+
+kpss.test(train_t,null=c("Level")) #to check stationary or not
+
+
+#P-value smaller than printed p-value,so we reject H0.
+#That means we don’t have enough evidence to claim that the process is stationary.
+
+
+
+kpss.test(train_t,null=c("Trend")) #to check deterministic or stochastic trend
+
+#Since p value is less than alpha, we can reject H0. 
+#That means we don’t have enough evidence to claim that we have deterministic trend.
+#In order to solve stochastic trend problem, differencing method will be applied .
+
+
+
+#Check the existence of unit roots
+
+
+#Hypothesis for Regular Unit Root
+
+#H0: The system has a regular unit root.
+
+#H1: The system doesn’t contain any regular unit root.
+
+#Hypothesis for Seasonal Unit Root
+
+#H0: The system has a seasonal unit root.
+
+#H1: The system doesn’t contain any seasonal unit root.
+
+library(pdR)
+hegy.out<-HEGY.test(hpi, itsd=c(1,0,c(1:3)),regvar=0, selectlags=list(mode="aic", Pmax=12))
+hegy.out$stats #HEGY test statistics
+
+# Fpi_11:12 for testing seasonal unit root,p-value=0.01 <0.05 ,so we do not have any seasonal unit root..
+# p value of tpi_1 for regular unit root , p-value=0.1 > 0.05,we have regular unit root.
+#To solve this problem, we need to take regular differencing.
+
+library(forecast)
+ndiffs(train_t)
+
+
+#nsdiffs(diff(diff(train_t)))
+# nsdiffs(diff(diff(train_t))) : Non seasonal data
+dif2=diff(diff(train_t))
+
+
+library(gridExtra)
+
+p1<-ggAcf(dif2,main="ACF Of Differenced Monthly retails Purchases",col="red",lag.max = 48)+theme_minimal()
+
+p2<-ggPacf(dif2,main="PACF Of  Differenced Monthly retails Purchases",col="red",lag.max = 48)+theme_minimal()
+
+grid.arrange(p1,p2,ncol=2)
+
+
+
+
+kpss.test(dif2,null=c("Level"))
+# Since p value is greater than printed p-value, we fail to reject H0.
+kpss.test(dif2,null=c("Trend")) #to check deterministic or stochastic trend
+# Since p value is greater than printed p-value, we fail to reject H0.
+
+
+
+
+#Suggest a model
+
+# suggesting a model is  : #SARIMA(1,2,1)(2,0,4)-6   #SARIMA(1,2,1)(2,0,4)-12
+
+
+
+#Fit the models
+
+#building the model
+#from pyramid.arima import auto_arima
+
+fit1= arima(train_t,order=c(1,2,1), seasonal=list(order=c(2,0,4),period=12),method='ML')
+fit1
+library(forecast)
+
+#auto.arima(dif2)  #after taking diff it gives ARIMA(3,0,4) with zero mean 
+
+auto.arima(train_t)
+# ARIMA(3,2,4) 
+
+
+
+fit2= auto.arima(train_t)
+fit2
+
+# Suggested model fit1 (-4931.52) is better than fit2 (-4916.96) since ıts AIC is smaller than fit2's AIC.
+
+
+# Forecast from the model
+
+
+forecastt<-forecast(dif2,model=fit1,h=12)
+forecastt
+accuracy(forecastt,test)
+#Construct ETS,TBATS,Nnetar and Prophet models
+fit3_e= ets(dif2)
+fit4_t= tbats(dif2)
+str(dif2)
+ds=c(seq(as.Date("1995/01/01"),as.Date("2020/04/01"),by="month"))
+head(ds)
+df=data.frame(ds,y=as.numeric(dif2))
+head(df)
+library(prophet)
+
+fit5_p=prophet(df, growth = 'linear',changepoint.range=0.8,changepoint.prior.scale=0.1,seasonality.prior.scale=0.5)
+head(fit5_p)
+fit6_n= nnetar(dif2, lambda = lambda )
+
+
+#ETS,TBATS,Nnetar and Prophet models
+
+future_ets=forecast(fit3_e, h=12)
+future_tbats=forecast(fit4_t, h=12)
+future_prophet=predict(fit5_p,n.ahead = 12)
+future_nnetar=forecast(fit6_n, periods=12)
+
+accuracy(future_ets,test)
+accuracy(future_tbats,test)
+accuracy(ts(future_prophet), test)
+accuracy(future_nnetar)
+
+# Compare the results
+
+#According to the results of RMSE of accuracy fnc , the best model is SARIMA(1,2,1)(2,0,4)_12 since its RMSE is the smallest one.
+
+
+
+
+
+
+```
+
